@@ -1,0 +1,79 @@
+import jwt from "jsonwebtoken"; 
+import { userModel } from "../DB/models/user.model.js";
+import { errorRes } from "../Utils/error.handel.js";
+import { redisClient } from "../DB/redis.connection.js";
+import { userSessionJwtIdKey } from "../Utils/redis-sevices.js";
+
+// Token Enum
+export const tokenEnum = {
+    access: "access",
+    refresh:"refresh"
+}
+
+// Authentication Fn
+export const auth = async (req , res , next)=>{
+        const {user} = await decodeToken({authorization: req.headers.authorization})
+        req.user = user
+        next()
+}
+
+// Decode Fn
+export const decodeToken = async ({authorization, tokenType = tokenEnum.access})=>{
+            if(!authorization  || !authorization.startsWith("Bearer ")){
+            errorRes({msg:"in-valid token",
+                statusCode:401
+            })
+        }
+
+        const token = authorization.split(" ")[1]
+        const payload = jwt.verify(token,
+            tokenType == tokenEnum.access ? 
+            process.env.ACCESS_TOKEN_SECRET:
+            process.env.REFRESH_TOKEN_SECRET
+          )
+        
+        const user = await userModel.findById(payload._id)
+        if (!user) {
+            errorRes({
+                msg:"User Not Found",
+                statusCode:404
+            })
+        }
+        if (!user.confirmedAt) {
+                errorRes({
+                        msg:"confirm first",
+                        statusCode:401
+                    })
+                }
+
+                const {jti} = payload
+                if(!jti){
+                    errorRes({
+                        msg:"invalid token",
+                        statusCode:400
+                    })
+                }
+
+                const redisJti = await redisClient.get(userSessionJwtIdKey(user._id, jti))
+                if(!redisJti){
+                    errorRes({
+                        msg:"logged out please login again",
+                        statusCode:400
+                    })
+                }
+                return  { user,jti };
+}
+
+
+// Authorization Fn: this function is from Part 2 of the assignment
+export const authorization = (...roles)=>{
+    return async(req,res,next)=>{
+        if(!roles.includes(req.user.role)){
+            errorRes({
+                msg:"un Authorized",
+                statusCode:401
+            })
+        }
+        next()
+    }
+}
